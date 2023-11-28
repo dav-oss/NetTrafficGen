@@ -11,6 +11,7 @@ from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether
 from ttkbootstrap import Style
 
+# Checking if terminal git works
 
 class TrafficGenerator:
     def __init__(self, app):
