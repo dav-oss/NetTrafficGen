@@ -4,6 +4,8 @@ from tkinter.scrolledtext import ScrolledText
 import math
 import time
 import threading
+from tkinter.ttk import Frame, Combobox, Button
+
 from scapy.all import *
 from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether
@@ -68,10 +70,11 @@ class TrafficGeneratorApp:
     def __init__(self, app):
         self.app = app
         self.app.title("Network Traffic Generator")
-        self.style = Style(theme="light")  # Set the initial theme to "light"
+        self.style = Style(theme="litera")  # Setting the initial theme to "light"
+        self.traffic_generator = TrafficGenerator(self)
 
-        # Create a frame using the ttkbootstrap style
-        self.frame = self.style.Frame(self.app, text="Traffic Configuration")
+        # Creating a frame using the ttkbootstrap style
+        self.frame = Frame(self.app)
         self.frame.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
         # Packet Size
@@ -85,7 +88,7 @@ class TrafficGeneratorApp:
         protocol_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
         common_protocols = ["TCP", "UDP", "HTTP", "FTP", "VoIP", "Custom"]
         self.protocol_var = tk.StringVar()
-        protocol_dropdown = self.style.Combobox(
+        protocol_dropdown = Combobox(
             self.frame, textvariable=self.protocol_var, values=common_protocols
         )
         protocol_dropdown.set("TCP")
@@ -118,37 +121,37 @@ class TrafficGeneratorApp:
         self.radius = 100
         self.center_x = 300
         self.center_y = 150
-        self.canvas_speedometer = self.style.Canvas(self.app, width=300, height=300)
+        self.canvas_speedometer = tk.Canvas(self.app, width=300, height=300)
         self.canvas_speedometer.grid(
             row=0, column=2, rowspan=5, padx=10, pady=10, sticky="e"
         )
 
         # Start Button
-        start_button = self.style.Button(
+        start_button = ttk.Button(
             self.app,
-            text="Start Traffic Generation",
+            text="Start",
             command=self.traffic_generator.start_traffic_generation,
         )
         start_button.grid(row=6, column=0, padx=10, pady=10, sticky="w")
 
         # Theme Toggle Button
-        self.theme_toggle_button = self.style.Button(
+        self.theme_toggle_button = Button(
             self.app, text="Toggle Theme", command=self.toggle_theme
         )
         self.theme_toggle_button.grid(row=6, column=1, padx=10, pady=10, sticky="e")
-
-        self.traffic_generator = TrafficGenerator(self)
 
         # Initialize the speedometer with an initial value
         self.traffic_generator.update_speedometer(self.traffic_generator.initial_value)
 
     def toggle_theme(self):
         # Toggle between light and dark themes
-        current_theme = self.style.get_theme()
+        current_theme = self.style.theme.name
         if current_theme == "litera":
-            self.style.set_theme("darkly")
-        else:
-            self.style.set_theme("light")
+            self.style = Style(theme="darkly")
+        if self.style.theme.name == "darkly":
+            self.style = Style(theme="litera")
+
+
 
 
 if __name__ == "__main__":
