@@ -8,10 +8,11 @@ from tkinter.ttk import Frame, Combobox, Button
 
 from scapy.all import *
 from scapy.layers.inet import IP, TCP
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import Ether, ARP
 from ttkbootstrap import Style
 
 # Checking if terminal git works
+
 
 class TrafficGenerator:
     def __init__(self, app):
@@ -37,28 +38,57 @@ class TrafficGenerator:
             tags="needle",
         )
 
+    def discover_devices(self):
+        # Use ARP to discover devices on the network
+        devices = []
+        ans, _ = srp(
+            Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst="192.168.1.1/24"),
+            timeout=2,
+            verbose=0,
+        )
+        for send_packet, recv_packet in ans:
+            devices.append(recv_packet.sprintf("%Ether.src% - %ARP.psrc%"))
+        return devices
+
+    def redirect_traffic(self):
+        devices = self.discover_devices()
+
+        if devices:
+            # Select the first discovered device as the target
+            self.target_device = devices[0]
+            self.analysis_result += (
+                f"Traffic will be redirected to: {self.target_device}\n"
+            )
+        else:
+            self.analysis_result += (
+                "No devices found on the network. Cannot redirect traffic.\n"
+            )
+
     def generate_traffic(self):
-        packet_size = int(self.app.packet_size_entry.get())
-        selected_protocol = self.app.protocol_var.get()
-        rate = int(self.app.rate_entry.get())
-        destination = self.app.destination_entry.get()
+        if not self.target_device:
+            self.redirect_traffic()  # Discover devices and select a target device
 
-        self.analysis_result = f"Traffic Analysis for Destination: {destination}\n"
-        self.analysis_result += f"Packet Size: {packet_size} bytes, Protocol: {selected_protocol}, Rate: {rate} packets/second\n"
+        if self.target_device:
+            # Generate traffic directed to the target device
+            packet_size = int(self.app.packet_size_entry.get())
+            selected_protocol = self.app.protocol_var.get()
+            rate = int(self.app.rate_entry.get())
 
-        for i in range(1, 6):
-            self.update_speedometer(i * 200)
-            packet = Ether() / IP(dst=destination) / TCP(dport=80)
-            self.analysis_result += f"Packet {i} sent to {destination}\n"
-            self.app.result_text.insert(tk.END, self.analysis_result)
-            self.app.result_text.see(tk.END)
-            self.app.update()
-            send(packet, verbose=0)  # Send the packet using Scapy
-            time.sleep(1)
+            for i in range(1, 6):
+                self.update_speedometer(i * 200)
+                packet = (
+                    Ether() / IP(dst=self.target_device.split(" - ")[1]) / TCP(dport=80)
+                )
+                self.analysis_result += f"Packet {i} sent to {self.target_device}\n"
+                self.app.result_text.insert(tk.END, self.analysis_result)
+                self.app.result_text.see(tk.END)
+                self.app.update()
+                send(packet, verbose=0)  # Send the packet using Scapy
+                time.sleep(1)
 
-            self.app.after(
-                1000, self.update_speedometer, i * 200
-            )  # Animate the speedometer needle
+                self.app.after(
+                    1000, self.update_speedometer, i * 200
+                )  # Animate the speedometer needle
 
     def start_traffic_generation(self):
         self.analysis_result = ""
@@ -151,8 +181,6 @@ class TrafficGeneratorApp:
             self.style = Style(theme="darkly")
         if self.style.theme.name == "darkly":
             self.style = Style(theme="litera")
-
-
 
 
 if __name__ == "__main__":
