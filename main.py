@@ -5,16 +5,25 @@ import math
 import time
 import threading
 from tkinter.ttk import Frame, Combobox, Button
+import logging
+import speedtest
 
 from scapy.all import *
 from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether, ARP
+from functools import partial
 from ttkbootstrap import Style
 
 
+def process_arp_packet(packet, devices):
+    if ARP in packet and packet[ARP].op in (1, 2):  # who-has or is-at
+        devices.append(packet.sprintf("%ARP.psrc% - %Ether.src%"))
+
+
 class TrafficGenerator:
-    def __init__(self, app):
+    def __init__(self, app, analysis_tab):
         self.app = app
+        self.analysis_tab = analysis_tab
         self.max_speed = 1000
         self.center_x = 150
         self.center_y = 150
@@ -23,6 +32,22 @@ class TrafficGenerator:
         self.analysis_result = ""
         self.traffic_thread = None
         self.target_devices = []  # The list of devices
+        self.speed_test = speedtest.Speedtest()
+
+        # Create a logger
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+
+        # Create a file handler and set the level to DEBUG
+        file_handler = logging.FileHandler("traffic_generator.log")
+        file_handler.setLevel(logging.DEBUG)
+
+        # Create a formatter and add it to the file handler
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        file_handler.setFormatter(formatter)
+
+        # Add the file handler to the logger
+        self.logger.addHandler(file_handler)
 
     def update_speedometer(self, value):
         angle = (value / self.max_speed) * 180
@@ -37,16 +62,22 @@ class TrafficGenerator:
             tags="needle",
         )
 
+    def get_internet_speed(self):
+        download_speed = self.speed_test.download()
+        return download_speed / 1_000_000
+
     def discover_devices(self):
+        # Clear the existing analysis results
+        self.analysis_tab.clear_analysis()
         # Use ARP to discover devices on the network
         devices = []
-        ans, _ = srp(
-            Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst="192.168.1.1/24"),
+        sniff(
+            filter="arp",
             timeout=2,
-            verbose=0,
+            prn=partial(process_arp_packet, devices=devices),
+            store=0,
         )
-        for send_packet, recv_packet in ans:
-            devices.append(recv_packet.sprintf("%Ether.src% - %ARP.psrc%"))
+        self.analysis_tab.update_arp_messages(devices)  # Display ARP messages
         return devices
 
     def redirect_traffic(self):
@@ -61,37 +92,59 @@ class TrafficGenerator:
             self.app.device_listbox.insert(tk.END, device)
 
     def generate_traffic(self):
-        if not self.target_devices:
-            self.redirect_traffic()  # Discover devices and select a target device
+        try:
+            if not self.target_devices:
+                self.redirect_traffic()  # Discover devices and select a target device
 
-        if self.target_devices:
-            # Generate traffic directed to the target device
-            packet_size = int(self.app.packet_size_entry.get())
-            selected_protocol = self.app.protocol_var.get()
-            rate = int(self.app.rate_entry.get())
+            if self.target_devices:
+                # Generate traffic directed to the target device
+                packet_size = int(self.app.packet_size_entry.get())
+                selected_protocol = self.app.protocol_var.get()
+                rate = int(self.app.rate_entry.get())
 
-            for i in range(1, 6):
-                self.update_speedometer(i * 200)
-                if self.app.send_to_all_var.get():
-                    # Send traffic to all devices in the target list
-                    for device in self.target_devices:
-                        self.send_packet(device.split(' - ')[1], packet_size, selected_protocol, rate)
-                else:
-                    # Send traffic to the selected device in the target list
-                    selected_device = self.app.device_listbox.get(tk.ACTIVE)
-                    if selected_device:
-                        self.send_packet(selected_device.split(' - ')[1], packet_size, selected_protocol, rate)
+                for i in range(1, 6):
+                    internet_speed = self.get_internet_speed()
+                    self.update_speedometer(internet_speed)
+                    if self.app.send_to_all_var.get():
+                        # Send traffic to all devices in the target list
+                        for device in self.target_devices:
+                            self.send_packet(
+                                device.split(" - ")[1],
+                                packet_size,
+                                selected_protocol,
+                                rate,
+                            )
                     else:
-                        self.analysis_result += "No device selected. Traffic not sent.\n"
-                        break
+                        # Send traffic to the selected device in the target list
+                        selected_device = self.app.device_listbox.get(tk.ACTIVE)
+                        if selected_device:
+                            self.send_packet(
+                                selected_device.split(" - ")[1],
+                                packet_size,
+                                selected_protocol,
+                                rate,
+                            )
+                        else:
+                            self.analysis_result += (
+                                "No device selected. Traffic not sent.\n"
+                            )
+                            break
 
-                self.app.result_text.insert(tk.END, self.analysis_result)
-                self.app.result_text.see(tk.END)
-                self.app.analysis_tab.update_analysis(self.analysis_result)  # Update analysis tab
-                self.app.update()
-                time.sleep(1)
+                    self.app.result_text.insert(tk.END, self.analysis_result)
+                    self.app.result_text.see(tk.END)
+                    self.app.analysis_tab.update_analysis(
+                        self.analysis_result
+                    )  # Update analysis tab
+                    self.app.update()
+                    time.sleep(1)
 
-                self.app.after(1000, self.update_speedometer, i * 200)  # Animate the speedometer needle
+                    self.app.after(
+                        100, self.update_speedometer, internet_speed
+                    )  # Animate the speedometer needle
+        except Exception as e:
+            error_message = f"Traffic generation error: {str(e)}"
+            self.analysis_tab.update_analysis(error_message)
+            self.logger.error(error_message)
 
     def send_packet(self, destination, packet_size, selected_protocol, rate):
         packet = Ether() / IP(dst=destination) / TCP(dport=80)
@@ -112,10 +165,17 @@ class AnalysisTab:
         self.app.notebook.add(self.tab, text="Analysis")
 
         self.analysis_text = ScrolledText(self.tab, wrap=tk.WORD)
-        self.analysis_text.grid(row=0, column=0, padx=10, pady=10, columnspan=2, rowspan=2)
+        self.analysis_text.grid(
+            row=0, column=0, padx=10, pady=10, columnspan=2, rowspan=2
+        )
 
     def update_analysis(self, analysis_result):
         self.analysis_text.insert(tk.END, analysis_result)
+        self.analysis_text.see(tk.END)
+
+    def update_arp_messages(self, arp_messages):
+        self.analysis_text.delete(1.0, tk.END)  # Clear previous ARP messages
+        self.analysis_text.insert(tk.END, "\n".join(arp_messages) + "\n")
         self.analysis_text.see(tk.END)
 
     def clear_analysis(self):
@@ -128,6 +188,7 @@ class TrafficGeneratorApp:
         self.app.title("Network Traffic Generator")
 
         self.notebook = ttk.Notebook(app)
+        self.analysis_tab = AnalysisTab(self)
 
         # Traffic Configuration Tab
         self.frame_config = ttk.Frame(self.notebook)
@@ -137,17 +198,28 @@ class TrafficGeneratorApp:
 
         # Rest of the UI elements
         self.packet_size_label = ttk.Label(self.frame_config, text="Packet Size:")
-        self.packet_size_label.grid(row=row_counter, column=0, padx=5, pady=5, sticky="w")
+        self.packet_size_label.grid(
+            row=row_counter, column=0, padx=5, pady=5, sticky="w"
+        )
         self.packet_size_entry = ttk.Entry(self.frame_config)
-        self.packet_size_entry.grid(row=row_counter, column=1, padx=5, pady=5, sticky="w")
+        self.packet_size_entry.grid(
+            row=row_counter, column=1, padx=5, pady=5, sticky="w"
+        )
         row_counter += 1
 
         self.protocol_label = ttk.Label(self.frame_config, text="Protocol:")
-        self.protocol_label.grid(row=row_counter, column=0, padx=10, pady=10, sticky="w")
+        self.protocol_label.grid(
+            row=row_counter, column=0, padx=10, pady=10, sticky="w"
+        )
         self.protocol_var = tk.StringVar(value="TCP")
-        self.protocol_dropdown = ttk.Combobox(self.frame_config, textvariable=self.protocol_var,
-                                              values=["TCP", "UDP", "ICMP"])
-        self.protocol_dropdown.grid(row=row_counter, column=1, padx=10, pady=10, sticky="w")
+        self.protocol_dropdown = ttk.Combobox(
+            self.frame_config,
+            textvariable=self.protocol_var,
+            values=["TCP", "UDP", "ICMP"],
+        )
+        self.protocol_dropdown.grid(
+            row=row_counter, column=1, padx=10, pady=10, sticky="w"
+        )
         row_counter += 1
 
         self.rate_label = ttk.Label(self.frame_config, text="Rate:")
@@ -158,25 +230,39 @@ class TrafficGeneratorApp:
 
         # Checkbutton to send traffic to all devices
         self.send_to_all_var = tk.BooleanVar()
-        send_to_all_checkbutton = ttk.Checkbutton(self.frame_config, text="Send to All Devices",
-                                                  variable=self.send_to_all_var)
-        send_to_all_checkbutton.grid(row=row_counter, column=1, padx=10, pady=10, sticky="w")
+        send_to_all_checkbutton = ttk.Checkbutton(
+            self.frame_config, text="Send to All Devices", variable=self.send_to_all_var
+        )
+        send_to_all_checkbutton.grid(
+            row=row_counter, column=1, padx=10, pady=10, sticky="w"
+        )
 
         # ListBox to display discovered devices
-        self.device_listbox = tk.Listbox(self.frame_config, selectmode=tk.SINGLE, exportselection=False)
+        self.device_listbox = tk.Listbox(
+            self.frame_config, selectmode=tk.SINGLE, exportselection=False
+        )
         self.device_listbox.grid(row=row_counter, column=1, padx=5, pady=5, sticky="w")
         row_counter += 1
 
         self.result_text = ScrolledText(self.app, width=40, height=10, wrap=tk.WORD)
-        self.result_text.grid(row=8, column=0, columnspan=2, padx=10, pady=10, sticky="w")
+        self.result_text.grid(
+            row=8, column=0, columnspan=2, padx=10, pady=10, sticky="w"
+        )
 
         self.canvas_speedometer = tk.Canvas(self.app, width=300, height=300, bg="white")
-        self.canvas_speedometer.grid(row=row_counter, column=2, rowspan=5, padx=10, pady=10, sticky="w")
+        self.canvas_speedometer.grid(
+            row=row_counter, column=2, rowspan=5, padx=10, pady=10, sticky="w"
+        )
 
-        self.traffic_generator = TrafficGenerator(self)
-        self.start_button = ttk.Button(self.app, text="Start Traffic Generation",
-                                       command=self.traffic_generator.start_traffic_generation)
-        self.start_button.grid(row=row_counter, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+        self.traffic_generator = TrafficGenerator(self.app, self.analysis_tab)
+        self.start_button = ttk.Button(
+            self.app,
+            text="Start Traffic Generation",
+            command=self.traffic_generator.start_traffic_generation,
+        )
+        self.start_button.grid(
+            row=row_counter, column=0, columnspan=2, padx=5, pady=5, sticky="w"
+        )
 
         # Analysis Tab
         self.analysis_tab = AnalysisTab(self)
@@ -187,7 +273,7 @@ class TrafficGeneratorApp:
         self.app.grid_rowconfigure(0, weight=1)
         self.app.grid_columnconfigure(0, weight=1)
 
-        self.traffic_generator = TrafficGenerator(self)
+        self.traffic_generator = TrafficGenerator(self.app, self.analysis_tab)
 
     def toggle_theme(self):
         # Toggle between light and dark themes

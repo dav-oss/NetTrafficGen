@@ -25,7 +25,6 @@ class TestTrafficGenerator(unittest.TestCase):
         devices = traffic_generator.discover_devices()
 
         # Assert that the devices were discovered correctly
-        # Replace this assertion with the actual expected value
         self.assertEqual(len(devices), 10)  # Replace 10 with the actual expected number of devices
 
 
