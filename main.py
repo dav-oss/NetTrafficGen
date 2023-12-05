@@ -12,7 +12,6 @@ from scapy.all import *
 from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether, ARP
 from functools import partial
-from ttkbootstrap import Style
 
 
 def process_arp_packet(packet, devices):
@@ -148,12 +147,17 @@ class TrafficGenerator:
 
     def send_packet(self, destination, packet_size, selected_protocol, rate):
         packet = Ether() / IP(dst=destination) / TCP(dport=80)
-        self.analysis_result += f"Packet sent to {destination}\n"
-        send(packet, verbose=0)  # Send the packet using Scapy
+        self.analysis_result += (
+            f"Packet sent to {destination} "
+            f"with size {packet_size} bytes, "
+            f"protocol {selected_protocol}, "
+            f"rate {rate} packets per second\n"
+        )
+        send(packet, verbose=0)
 
     def start_traffic_generation(self):
         self.analysis_result = ""
-        self.app.result_text.delete(1.0, tk.END)  # Clear previous analysis results
+        self.result_text.delete(1.0, tk.END)  # Clear previous analysis results
         self.traffic_thread = threading.Thread(target=self.generate_traffic)
         self.traffic_thread.start()
 
@@ -265,7 +269,6 @@ class TrafficGeneratorApp:
         )
 
         # Analysis Tab
-        self.analysis_tab = AnalysisTab(self)
 
         self.notebook.grid(row=0, column=0, sticky="nsew")  # Adjust as needed
 
